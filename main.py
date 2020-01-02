@@ -1,6 +1,7 @@
 import time
 from configparser import ConfigParser
 
+import water_bath_broker
 from logger import _configure_logger
 
 if __name__ == '__main__':
@@ -8,11 +9,6 @@ if __name__ == '__main__':
     cfg_parser.read("config.ini")
     _configure_logger(cfg_parser)
 
-    broker = FP50Broker(cfg_parser)
-    broker.start()
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        broker.stop()
-        broker.join()
+    bath_broker = water_bath_broker.WaterBathBroker(cfg_parser)
+    while True:
+        time.sleep(1)

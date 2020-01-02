@@ -9,7 +9,7 @@ from rx.core.typing import Scheduler
 
 from operators import rate_limit, ordered_resolution
 
-logger = logging.getLogger("fp50")
+logger = logging.getLogger("water_bath")
 
 
 class FP50Control:

@@ -4,7 +4,7 @@ from configparser import ConfigParser
 
 def _configure_logger(config):
     logging.root.setLevel(logging.DEBUG)
-    logger = logging.getLogger("fp50")
+    logger = logging.getLogger("water_bath")
 
     level_mapping = {
         "debug": logging.DEBUG,
