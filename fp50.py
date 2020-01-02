@@ -1,5 +1,6 @@
 import argparse
 import logging
+import time
 
 import rx
 import serial
@@ -44,14 +45,13 @@ class FP50Control:
             logger.error("Serial port is not opened. Could not send message")
             return
 
-        logger.debug(f"Serial write: {command.encode('string_escape')}")
-        self.serial.write(command)
+        logger.debug(f"Serial write: {command.encode('unicode_escape')}")
+        self.serial.write(command.encode("ascii"))
 
     def _error_handler(self, error: Exception):
         logger.error(error)
 
     def startup(self):
-        self.serial.open()
         self.command_queue.on_next("OUT_MODE_05 1\r")  # turn on unit
         self.command_queue.on_next("OUT_MODE_08 1\r")  # faster standard mode
         self.command_queue.on_next("OUT_MODE_02 0\r")  # self tuning off
@@ -114,6 +114,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     fp50 = FP50Control(args.port, args.baud)
+    fp50.startup()
+
     if args.command == "setpoint":
         fp50.set_temperature(args.temperature)
         print(f"Set temperature to {args.temperature}")
@@ -130,4 +132,5 @@ if __name__ == '__main__':
         )
     else:
         print(f"Unknown command {args.command}")
+    time.sleep(1)
 

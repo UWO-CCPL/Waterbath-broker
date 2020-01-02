@@ -44,7 +44,8 @@ def rate_limit(interval: float):
             delta = datetime.timedelta(seconds=interval)
 
             def on_next(value):
-                nonlocal last_event_time
+                nonlocal last_event_time, scheduler
+                scheduler = scheduler or rx.scheduler.NewThreadScheduler()
                 now = scheduler.now
                 if now - last_event_time >= delta:
                     scheduler.schedule(lambda *args: observer.on_next(value))
