@@ -25,11 +25,12 @@ class WaterBathBroker:
         )
         logger.info("InfluxDB client connected")
 
-        self.mqtt = mqtt.Client(self.config.get("mqtt", "id"))
+        self.mqtt = mqtt.Client(self.config.get("mqtt", "id"), protocol=mqtt.MQTTv31)
         self.mqtt.connect(
             self.config.get("mqtt", "host"),
             self.config.getint("mqtt", "port"),
         )
+        self.mqtt.loop_start()
         self.configure_mqtt_topics()
         logger.info("MQTT client connected")
 
@@ -44,19 +45,16 @@ class WaterBathBroker:
         self.configure_timed_read()
 
     def configure_mqtt_topics(self):
-        if not self.mqtt.is_connected():
-            raise RuntimeError("MQTT is not connected!")
-
         topic = "fp50/+/setpoint"
         self.mqtt.subscribe(topic)
 
         self.mqtt.message_callback_add(topic, self.temperature_setpoint_changed)
 
-    def temperature_setpoint_changed(self, data):
+    def temperature_setpoint_changed(self, client, userdata, message):
         try:
-            data = float(data)
+            data = float(message.payload)
         except ValueError:
-            logger.error(f"Failed to parse {data} into float")
+            logger.error(f"Failed to parse {message.payload} into float")
             return
         self.control.set_temperature(data)
 
@@ -72,6 +70,7 @@ class WaterBathBroker:
         if internal_temperature_upload_interval > 0:
             # enabled
             rx.interval(internal_temperature_upload_interval, scheduler=NewThreadScheduler()).pipe(
+                operators.delay(0.1),
                 operators.flat_map(lambda x: self.control.get_internal_temperature())
             ).subscribe(self.upload_internal_temperature)
 
