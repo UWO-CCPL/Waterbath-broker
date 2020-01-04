@@ -14,26 +14,35 @@ logger = logging.getLogger("water_bath")
 
 
 class WaterBathBroker:
+    mqtt: mqtt.Client
+
     def __init__(self, config: configparser.ConfigParser):
         self.config = config
 
-        self.influxdb = InfluxDBClient(
-            self.config.get("influxdb", "host"),
-            self.config.getint("influxdb", "port"),
-            self.config.get("influxdb", "username"),
-            self.config.get("influxdb", "password"),
-            self.config.get("influxdb", "database"),
-        )
-        logger.info("InfluxDB client connected")
+        if self.config.getboolean("influxdb", "enabled"):
+            self.influxdb = InfluxDBClient(
+                self.config.get("influxdb", "host"),
+                self.config.getint("influxdb", "port"),
+                self.config.get("influxdb", "username"),
+                self.config.get("influxdb", "password"),
+                self.config.get("influxdb", "database"),
+            )
+            logger.info("InfluxDB client connected")
+        else:
+            self.influxdb = None
 
-        self.mqtt = mqtt.Client(self.config.get("mqtt", "id"), protocol=mqtt.MQTTv31)
-        self.mqtt.connect(
-            self.config.get("mqtt", "host"),
-            self.config.getint("mqtt", "port"),
-        )
-        self.mqtt.loop_start()
-        self.configure_mqtt_topics()
-        logger.info("MQTT client connected")
+        if self.config.getboolean("mqtt", "enabled"):
+            self.base_topic = self.config.get("mqtt", "topic")
+            self.mqtt = mqtt.Client(self.config.get("mqtt", "id"), protocol=mqtt.MQTTv31)
+            self.mqtt.connect(
+                self.config.get("mqtt", "host"),
+                self.config.getint("mqtt", "port"),
+            )
+            self.mqtt.loop_start()
+            self.configure_mqtt_topics()
+            logger.info("MQTT client connected")
+        else:
+            self.mqtt = None
 
         self.control = FP50Control(
             self.config.get("fp50", "serial"),
@@ -46,10 +55,13 @@ class WaterBathBroker:
         self.configure_timed_read()
 
     def configure_mqtt_topics(self):
-        topic = "fp50/+/setpoint"
-        self.mqtt.subscribe(topic)
+        setpoint_topic = f"{self.base_topic}/setpoint"
+        self.mqtt.subscribe(setpoint_topic)
+        self.mqtt.message_callback_add(setpoint_topic, self.temperature_setpoint_changed)
 
-        self.mqtt.message_callback_add(topic, self.temperature_setpoint_changed)
+        pid_topic = f"{self.base_topic}/pid/+"
+        self.mqtt.subscribe(pid_topic)
+        self.mqtt.message_callback_add(pid_topic, self.pid_changed)
 
     def temperature_setpoint_changed(self, client, userdata, message):
         try:
@@ -58,6 +70,20 @@ class WaterBathBroker:
             logger.error(f"Failed to parse {message.payload} into float")
             return
         self.control.set_temperature(data)
+
+    def pid_changed(self, client, userdata, message: mqtt.MQTTMessage):
+        target = message.topic.split("/")[-1]
+        p = i = d = None
+        if target == "p":
+            p = float(message.payload)
+        elif target == "i":
+            i = float(message.payload)
+        elif target == "d":
+            d = float(message.payload)
+        else:
+            logger.error(f"Unrecognized parameter: {target}")
+            return
+        self.control.set_pid(p, i, d)
 
     def configure_timed_read(self):
         power_upload_interval = self.config.getfloat("influxdb", "power_upload_interval")
@@ -78,33 +104,42 @@ class WaterBathBroker:
     def upload_power(self, power):
         if power is None:
             return
-        json_body = [{
-            "measurement": "water_bath",
-            "tags": {
-                "device": self.config.get("tags", "device"),
-                "location": self.config.get("tags", "location"),
-            },
-            "fields": {
-                "power": power
-            }
-        }]
+        if self.influxdb:
+            json_body = [{
+                "measurement": "water_bath",
+                "tags": {
+                    "device": self.config.get("tags", "device"),
+                    "location": self.config.get("tags", "location"),
+                },
+                "fields": {
+                    "power": power
+                }
+            }]
 
-        self.influxdb.write_points(json_body)
-        logger.info(f"Power={power} uploaded to InfluxDB")
+            self.influxdb.write_points(json_body)
+            logger.info(f"Power={power} uploaded to InfluxDB")
+
+        if self.mqtt:
+            self.mqtt.publish(f"{self.base_topic}/power", bytes(str(power)))
 
     def upload_internal_temperature(self, internal_temperature):
         if internal_temperature is None:
             return
-        json_body = [{
-            "measurement": "water_bath",
-            "tags": {
-                "device": self.config.get("tags", "device"),
-                "location": self.config.get("tags", "location"),
-            },
-            "fields": {
-                "internal_temperature": internal_temperature
-            }
-        }]
 
-        self.influxdb.write_points(json_body)
-        logger.info(f"Internal temperature={internal_temperature} uploaded to InfluxDB")
+        if self.influxdb:
+            json_body = [{
+                "measurement": "water_bath",
+                "tags": {
+                    "device": self.config.get("tags", "device"),
+                    "location": self.config.get("tags", "location"),
+                },
+                "fields": {
+                    "internal_temperature": internal_temperature
+                }
+            }]
+
+            self.influxdb.write_points(json_body)
+            logger.info(f"Internal temperature={internal_temperature} uploaded to InfluxDB")
+
+        if self.mqtt:
+            self.mqtt.publish(f"{self.base_topic}/temperature", bytes(str(internal_temperature)))
