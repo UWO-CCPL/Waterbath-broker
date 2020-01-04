@@ -37,3 +37,10 @@ def _configure_logger(config):
         logger.addHandler(fh)
 
     return logger
+
+
+logger = logging.getLogger("water_bath")
+
+
+def error_handler(error: Exception):
+    logger.error(error, exc_info=error)

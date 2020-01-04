@@ -7,6 +7,7 @@ import serial
 from rx import subject, operators, scheduler, Observable
 from rx.core.typing import Scheduler
 
+from logger import error_handler
 from operators import rate_limit, ordered_resolution
 
 logger = logging.getLogger("water_bath")
@@ -22,18 +23,18 @@ class FP50Control:
         self.command_queue = subject.Subject()
         self.command_queue.pipe(
             rate_limit(command_interval)
-        ).subscribe(self._send_command, self._error_handler)
+        ).subscribe(self._send_command, error_handler)
 
         self.resolve_queue = subject.Subject()
 
-        self.serial = serial.Serial(serial_port, baud_rate, xonxoff=True)  # software flow control
-        self._configure_serial_receive()
+        self.serial = serial.Serial(serial_port, baud_rate, xonxoff=True, timeout=0.5)  # software flow control
+        # self._configure_serial_receive()
 
     def _configure_serial_receive(self):
         def _serial_recv(sc: Scheduler, state):
             if self.serial.isOpen():
                 line = self.serial.read_until(bytes(self.terminator, 'ascii')).decode('ascii')
-                line.strip(self.terminator)
+                line = line.strip(self.terminator)
                 self.resolve_queue.on_next(line)
                 sc.schedule(_serial_recv)
 
@@ -47,9 +48,6 @@ class FP50Control:
 
         logger.debug(f"Serial write: {command.encode('unicode_escape')}")
         self.serial.write(command.encode("ascii"))
-
-    def _error_handler(self, error: Exception):
-        logger.error(error)
 
     def startup(self):
         self.command_queue.on_next("OUT_MODE_05 1\r")  # turn on unit
@@ -67,17 +65,36 @@ class FP50Control:
         if d is not None:
             self.command_queue.on_next(f"OUT_SP_8 {d:3.1f}\r")
 
+    def read_until_terminator(self, x):
+        while True:
+            try:
+                data = self.serial.read_until(bytes(self.terminator, "ascii")).decode('ascii')
+            except:
+                logger.error(f"Read timeout. current buffer: {self.serial.read_all()}")
+                return None
+            # if data.startswith("-") or data.startswith('#'):
+            #     continue
+            # else:
+            #     break
+            break
+        stripped = data.strip(self.terminator)
+        try:
+            return float(stripped)
+        except:
+            return None
+
+    def _serial_reading_operator(self):
+        return rx.pipe(
+            operators.map(self.read_until_terminator),
+        )
+
     def get_power(self) -> Observable:
         """
         Upon subscription, use side effect to send a query command, and then register the resolver to read value
         :return:
         """
         return rx.from_callable(lambda: self.command_queue.on_next("IN_PV_01\r")).pipe(
-            operators.flat_map(
-                lambda x: self.resolve_queue.pipe(
-                    ordered_resolution()
-                )
-            )
+            self._serial_reading_operator()
         )
 
     def get_internal_temperature(self) -> Observable:
@@ -86,11 +103,7 @@ class FP50Control:
         :return:
         """
         return rx.from_callable(lambda: self.command_queue.on_next("IN_PV_00\r")).pipe(
-            operators.flat_map(
-                lambda x: self.resolve_queue.pipe(
-                    ordered_resolution()
-                )
-            )
+            self._serial_reading_operator()
         )
 
 
@@ -133,4 +146,3 @@ if __name__ == '__main__':
     else:
         print(f"Unknown command {args.command}")
     time.sleep(1)
-

@@ -8,6 +8,7 @@ from rx import operators
 from rx.scheduler import NewThreadScheduler
 
 from fp50 import FP50Control
+from logger import error_handler
 
 logger = logging.getLogger("water_bath")
 
@@ -66,15 +67,17 @@ class WaterBathBroker:
             # enabled
             rx.interval(power_upload_interval, scheduler=NewThreadScheduler()).pipe(
                 operators.flat_map(lambda x: self.control.get_power())
-            ).subscribe(self.upload_power)
+            ).subscribe(self.upload_power, error_handler)
         if internal_temperature_upload_interval > 0:
             # enabled
             rx.interval(internal_temperature_upload_interval, scheduler=NewThreadScheduler()).pipe(
-                operators.delay(0.1),
+                operators.delay(self.config.getfloat("fp50", "query_delay")),
                 operators.flat_map(lambda x: self.control.get_internal_temperature())
-            ).subscribe(self.upload_internal_temperature)
+            ).subscribe(self.upload_internal_temperature, error_handler)
 
     def upload_power(self, power):
+        if power is None:
+            return
         json_body = [{
             "measurement": "water_bath",
             "tags": {
@@ -90,6 +93,8 @@ class WaterBathBroker:
         logger.info(f"Power={power} uploaded to InfluxDB")
 
     def upload_internal_temperature(self, internal_temperature):
+        if internal_temperature is None:
+            return
         json_body = [{
             "measurement": "water_bath",
             "tags": {
