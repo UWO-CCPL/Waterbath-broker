@@ -19,6 +19,14 @@ class WaterBathBroker:
     def __init__(self, config: configparser.ConfigParser):
         self.config = config
 
+        self.control = FP50Control(
+            self.config.get("fp50", "serial"),
+            self.config.getint("fp50", "baud"),
+            self.config.getfloat("fp50", "command_interval")
+        )
+        self.control.startup()
+        logger.info("FP50 control connected")
+
         if self.config.getboolean("influxdb", "enabled"):
             self.influxdb = InfluxDBClient(
                 self.config.get("influxdb", "host"),
@@ -44,13 +52,7 @@ class WaterBathBroker:
         else:
             self.mqtt = None
 
-        self.control = FP50Control(
-            self.config.get("fp50", "serial"),
-            self.config.getint("fp50", "baud"),
-            self.config.getfloat("fp50", "command_interval")
-        )
-        self.control.startup()
-        logger.info("FP50 control connected")
+
 
         self.configure_timed_read()
 
@@ -86,20 +88,18 @@ class WaterBathBroker:
         self.control.set_pid(p, i, d)
 
     def configure_timed_read(self):
-        power_upload_interval = self.config.getfloat("influxdb", "power_upload_interval")
-        internal_temperature_upload_interval = self.config.getfloat("influxdb", "internal_temperature_upload_interval")
+        interval = self.config.getfloat("fp50", "interval")
 
-        if power_upload_interval > 0:
+        if interval > 0:
             # enabled
-            rx.interval(power_upload_interval, scheduler=NewThreadScheduler()).pipe(
-                operators.flat_map(lambda x: self.control.get_power())
-            ).subscribe(self.upload_power, error_handler)
-        if internal_temperature_upload_interval > 0:
-            # enabled
-            rx.interval(internal_temperature_upload_interval, scheduler=NewThreadScheduler()).pipe(
+            rx.interval(interval, scheduler=NewThreadScheduler()).pipe(
+                operators.flat_map(lambda x: self.control.get_power()),
+                operators.map(lambda x: self.upload_power(x)),
                 operators.delay(self.config.getfloat("fp50", "query_delay")),
-                operators.flat_map(lambda x: self.control.get_internal_temperature())
-            ).subscribe(self.upload_internal_temperature, error_handler)
+                operators.flat_map(lambda x: self.control.get_internal_temperature()),
+                operators.map(lambda x: self.upload_internal_temperature(x)),
+                operators.catch(error_handler)
+            ).subscribe()
 
     def upload_power(self, power):
         if power is None:
@@ -120,7 +120,7 @@ class WaterBathBroker:
             logger.info(f"Power={power} uploaded to InfluxDB")
 
         if self.mqtt:
-            self.mqtt.publish(f"{self.base_topic}/power", bytes(str(power)))
+            self.mqtt.publish(f"{self.base_topic}/power", bytes(str(power), "ascii"))
 
     def upload_internal_temperature(self, internal_temperature):
         if internal_temperature is None:
@@ -142,4 +142,4 @@ class WaterBathBroker:
             logger.info(f"Internal temperature={internal_temperature} uploaded to InfluxDB")
 
         if self.mqtt:
-            self.mqtt.publish(f"{self.base_topic}/temperature", bytes(str(internal_temperature)))
+            self.mqtt.publish(f"{self.base_topic}/temperature", bytes(str(internal_temperature), "ascii"))
