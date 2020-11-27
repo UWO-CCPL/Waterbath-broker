@@ -54,7 +54,7 @@ class WaterBathBroker:
         self.mqtt.subscribe(pid_topic)
         self.mqtt.message_callback_add(pid_topic, self.pid_changed)
 
-        startup_topic = f"{self.base_topic}/setpoint"
+        startup_topic = f"{self.base_topic}/start"
         self.mqtt.subscribe(startup_topic)
         self.mqtt.message_callback_add(startup_topic, self.startup_requested)
 
@@ -96,8 +96,11 @@ class WaterBathBroker:
             ).subscribe()
 
     def startup_requested(self, client, userdata, message: mqtt.MQTTMessage):
-        if float(message.payload):
+        v = float(message.payload)
+        if v == 1:
             self.control.startup()
+        elif v == 0:
+            self.control.shutdown()
 
     def upload_power(self, power):
         if power is None:

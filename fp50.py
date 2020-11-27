@@ -54,6 +54,9 @@ class FP50Control:
         self.command_queue.on_next("OUT_MODE_08 1\r")  # faster standard mode
         self.command_queue.on_next("OUT_MODE_02 0\r")  # self tuning off
 
+    def shutdown(self):
+        self.command_queue.on_next("OUT_MODE_05 0\r")  # turn off unit
+
     def set_temperature(self, set_point: float):
         self.command_queue.on_next(f"OUT_SP_00 {set_point:.2f}\r")
 
