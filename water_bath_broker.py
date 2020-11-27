@@ -2,7 +2,7 @@ import configparser
 import logging
 
 import rx
-from influxdb import InfluxDBClient
+
 import paho.mqtt.client as mqtt
 from rx import operators
 from rx.scheduler import NewThreadScheduler
@@ -24,20 +24,11 @@ class WaterBathBroker:
             self.config.getint("fp50", "baud"),
             self.config.getfloat("fp50", "command_interval")
         )
-        self.control.startup()
-        logger.info("FP50 control connected")
 
-        if self.config.getboolean("influxdb", "enabled"):
-            self.influxdb = InfluxDBClient(
-                self.config.get("influxdb", "host"),
-                self.config.getint("influxdb", "port"),
-                self.config.get("influxdb", "username"),
-                self.config.get("influxdb", "password"),
-                self.config.get("influxdb", "database"),
-            )
-            logger.info("InfluxDB client connected")
-        else:
-            self.influxdb = None
+        if self.config.getboolean("fp50", "startup_on_start"):
+            self.control.startup()
+
+        logger.info("FP50 control connected")
 
         if self.config.getboolean("mqtt", "enabled"):
             self.base_topic = self.config.get("mqtt", "topic")
@@ -52,8 +43,6 @@ class WaterBathBroker:
         else:
             self.mqtt = None
 
-
-
         self.configure_timed_read()
 
     def configure_mqtt_topics(self):
@@ -64,6 +53,10 @@ class WaterBathBroker:
         pid_topic = f"{self.base_topic}/pid/+"
         self.mqtt.subscribe(pid_topic)
         self.mqtt.message_callback_add(pid_topic, self.pid_changed)
+
+        startup_topic = f"{self.base_topic}/setpoint"
+        self.mqtt.subscribe(startup_topic)
+        self.mqtt.message_callback_add(startup_topic, self.startup_requested)
 
     def temperature_setpoint_changed(self, client, userdata, message):
         try:
@@ -91,6 +84,7 @@ class WaterBathBroker:
         interval = self.config.getfloat("fp50", "interval")
 
         if interval > 0:
+            logger.info("Configuring timed read")
             # enabled
             rx.interval(interval, scheduler=NewThreadScheduler()).pipe(
                 operators.flat_map(lambda x: self.control.get_power()),
@@ -101,23 +95,13 @@ class WaterBathBroker:
                 operators.catch(error_handler)
             ).subscribe()
 
+    def startup_requested(self, client, userdata, message: mqtt.MQTTMessage):
+        if float(message.payload):
+            self.control.startup()
+
     def upload_power(self, power):
         if power is None:
             return
-        if self.influxdb:
-            json_body = [{
-                "measurement": "water_bath",
-                "tags": {
-                    "device": self.config.get("tags", "device"),
-                    "location": self.config.get("tags", "location"),
-                },
-                "fields": {
-                    "power": power
-                }
-            }]
-
-            self.influxdb.write_points(json_body)
-            logger.info(f"Power={power} uploaded to InfluxDB")
 
         if self.mqtt:
             self.mqtt.publish(f"{self.base_topic}/power", bytes(str(power), "ascii"))
@@ -125,21 +109,6 @@ class WaterBathBroker:
     def upload_internal_temperature(self, internal_temperature):
         if internal_temperature is None:
             return
-
-        if self.influxdb:
-            json_body = [{
-                "measurement": "water_bath",
-                "tags": {
-                    "device": self.config.get("tags", "device"),
-                    "location": self.config.get("tags", "location"),
-                },
-                "fields": {
-                    "internal_temperature": internal_temperature
-                }
-            }]
-
-            self.influxdb.write_points(json_body)
-            logger.info(f"Internal temperature={internal_temperature} uploaded to InfluxDB")
 
         if self.mqtt:
             self.mqtt.publish(f"{self.base_topic}/temperature", bytes(str(internal_temperature), "ascii"))
